@@ -3,12 +3,20 @@
 public class StatCollector
 {
     public Dictionary<string, MethodSymbolInfo> Calls { get; }
+    public List<MethodSymbolInfo> Declarations { get; set; }
 
     public StatCollector()
     {
         Calls = new Dictionary<string, MethodSymbolInfo>();
+        Declarations = new List<MethodSymbolInfo>();
     }
 
+
+    public void AddMethodDeclaration(IMethodSymbol methodSymbol)
+    {
+        var msi = CreateMethodSymbolInfo(methodSymbol);
+        Declarations.Add(msi);
+    }
     public MethodSymbolInfo AddInvocation(IMethodSymbol ms)
     {
         var cacheKey = ms.ToString();
@@ -18,8 +26,16 @@ public class StatCollector
             cached.Count++;
             return cached;
         }
-
         
+        var msi = CreateMethodSymbolInfo(ms);
+        Calls[cacheKey] = msi;
+        return msi;
+
+    }
+
+    private MethodSymbolInfo CreateMethodSymbolInfo(IMethodSymbol ms)
+    {
+        MethodSymbolInfo cached;
         string methName = ms.Name;
         if (ms.TypeArguments.Length > 0)
         {
@@ -28,11 +44,14 @@ public class StatCollector
         }
 
         var receiverType = PrjWalker.RenderType(ms.ReceiverType);
-        var s = PrjWalker.YamlEscape($"{methName}() {receiverType}");
+        var s = Util.YamlEscape($"{methName}() {receiverType}");
 
         var ai = ms.ContainingAssembly.Name;
         var skip = false || ai == "mscorlib" || ai == "System.Core";
-
+        var attrs = string.Join(",", ms.GetAttributes().Select(a => a.AttributeClass.Name).Distinct()
+            .Select(n => $"[{n}]"));
+        
+        
         cached = new MethodSymbolInfo
         {
             Count = 1,
@@ -40,21 +59,43 @@ public class StatCollector
             Type = receiverType,
             Name = methName,
             Symbol = ms,
-            Skip = skip
+            Skip = skip,
+            Attrs = attrs,
         };
-        Calls[cacheKey] = cached;
         return cached;
     }
-
-    public void RenderStats()
+    
+    public void RenderUnused()
     {
-        PrjWalker.Emit(1, "callstats: |");
+        Util.Emit(1, "unusedinterfacemethods:");
+
+        var calledClasses = Calls.Values
+            .Where(msi => msi.Symbol.IsAbstract)
+            .Select(msi => (msi.Type, msi.Name)).ToHashSet();
+        var declaredClasses = Declarations
+            .Where(msi => msi.Symbol.IsAbstract)
+            .Select(msi => (msi.Type, msi.Name)).ToHashSet();
+        var unusedclasses = declaredClasses.Except(calledClasses).ToList();
+        foreach (var g in unusedclasses.GroupBy(e => e.Type))
+        {
+            
+            Util.Emit(2, g.Key+ ":");
+            foreach (var it in g)
+            {
+                Util.Emit(3, "- " + it.Name);
+            }
+        }
+    }
+    
+    public void RenderCallStats()
+    {
+        Util.Emit(1, "callstats: |");
         var byCount = Calls.Values.OrderBy(it => it.Count);
         foreach (var msi in byCount)
         {
             if (msi.Skip) 
                 continue;
-            PrjWalker.Emit(2, $"{msi.Count}; {msi.Rendered}; {msi.Symbol.ContainingAssembly.Name}");
+            Util.Emit(2, $"{msi.Count}\t{msi.Rendered}\t{msi.Symbol.ContainingAssembly.Name}\t{msi.Attrs}");
         }
     }
 }

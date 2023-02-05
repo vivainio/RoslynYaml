@@ -1,61 +1,65 @@
-﻿// See https://aka.ms/new-console-template for more information
-
-using System.Security.AccessControl;
+﻿
 using Microsoft.Build.Locator;
-using Microsoft.CodeAnalysis;
-using Microsoft.CodeAnalysis.CSharp;
-using Microsoft.CodeAnalysis.CSharp.Syntax;
-using Microsoft.CodeAnalysis.MSBuild;
+using Spectre.Console.Cli;
+
 MSBuildLocator.RegisterDefaults();
 
 
-var solutions = new[]
+
+var app = new CommandApp();
+app.Configure(config =>
 {
-    @"Src\Common\CommonTail.sln",
-    @"Src\Common\CommonHead.sln",
-    @"Src\Common\Gateway\Gateway.sln"
-}.Select(p => Path.Combine(@"c:\r\1", p));
+    config.AddCommand<EmitCommand>("emit");
+    config.PropagateExceptions();
+});
+app.Run(args);
 
-var collector = new StatCollector();
-
-foreach (var s in solutions)
+public class EmitSettings : CommandSettings
 {
+    [CommandArgument(0, "<Path>")]
+    public string[] Path { get; set; }
 
-    await EmitSolution(s, collector);
+    [CommandOption("--projectpattern")] public string ProjectPattern { get; set; }
+    [CommandOption("--quiet")] public bool Quiet { get; set; } = false;
 }
 
-PrjWalker.Emit(0, ".footer:");
-collector.RenderStats();
-
-async Task EmitSolution(string path, StatCollector statCollector)
+public class EmitCommand : AsyncCommand<EmitSettings>
 {
-    using var workspace = MSBuildWorkspace.Create();
-    var p = await workspace.OpenSolutionAsync(path);
-
-    foreach (var prj in p.Projects)
+    public override async Task<int> ExecuteAsync(CommandContext context, EmitSettings settings)
     {
-        await EmitProject(prj, statCollector);
-    }
-}
+        var collector = new StatCollector();
 
-async Task EmitProject(Project prj, StatCollector collector)
-{
-    var comp = await prj.GetCompilationAsync();
-    PrjWalker.Emit(0, "---");
-    PrjWalker.Emit(0, ".header:");
-    PrjWalker.Emit(1, "project: " + prj.Name);
+        var solutions = new List<string>();
 
-    foreach (var doc in prj.Documents)
-    {
-        var tree = await doc.GetSyntaxTreeAsync();
-        if (tree == null)
+        foreach (var path in settings.Path)
         {
-            continue;
+            if (File.Exists(path) && path.EndsWith(".sln"))
+            {
+                solutions.Add(path);
+            }
+            if (Directory.Exists(path))
+            {
+                var fnames = Directory.GetFiles(path, "*.sln", SearchOption.AllDirectories);
+                solutions.AddRange(fnames);
+            }
+            
         }
-        var root = tree.GetCompilationUnitRoot();
-        var mdl = comp.GetSemanticModel(tree);
-        var walker = new PrjWalker(mdl, collector);
-        walker.Visit(root);
-        
+        Util.Emit(0, ".workplan:");
+        Util.Emit(1, "solutions:");
+        foreach (var sln in solutions)
+        {
+            Util.Emit(2, "- " + sln);
+        }
+
+        foreach (var s in solutions)
+        {
+            await Emitters.EmitSolution(s, collector, settings);
+        }
+
+        Util.Emit(0, ".footer:");
+        collector.RenderUnused();
+        //collector.RenderDeclared();
+        //collector.RenderCallStats();
+        return 0;
     }
 }
